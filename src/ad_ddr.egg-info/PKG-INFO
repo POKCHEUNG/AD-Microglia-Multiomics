@@ -1,0 +1,155 @@
+Metadata-Version: 2.4
+Name: ad-ddr
+Version: 0.1.0
+Summary: DNA damage response across the Alzheimer's disease continuum in SEA-AD single-nucleus multiome data
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: pandas
+Requires-Dist: matplotlib
+Requires-Dist: anndata
+Requires-Dist: scanpy>=1.9
+Requires-Dist: sc-ddr-multiome
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Provides-Extra: notebook
+Requires-Dist: jupyterlab; extra == "notebook"
+Requires-Dist: ipykernel; extra == "notebook"
+Dynamic: license-file
+
+# ad-ddr
+
+**DNA damage response across the Alzheimer's disease continuum: single-nucleus RNA + ATAC of human cortex (SEA-AD).**
+
+> 中文简介：用 SEA-AD（西雅图阿尔茨海默病脑细胞图谱）的单细胞核多组学数据，检验"AD 病程中神经元 DNA 修复程序发生改变"这一假设。主要结论：(1) 在 73 个供体、9 个脑区中，**神经元的 DNA 修复/p53 程序与连续病程评分（CPS）无关**（|r| < 0.17，95% 置信区间排除了 |r| > 0.4 的效应）；(2) 阳性对照：**小胶质细胞的疾病相关程序（DAM）在 9 个脑区中全部随病程升高**，说明流程能检出真实信号；(3) 配对多组学显示，供体间 DDR 程序表达的差异**同时体现在启动子染色质可及性上**（中位 r = 0.23，置换 p = 0.001）。项目也记录了只用 12 个供体时出现的假象，以及如何发现和排除它们。
+
+## Question
+
+Neurons are post-mitotic and live for decades. They have to repair DNA without the replication-coupled pathways (HR, FA, MMR). DNA double-strand breaks accumulate in AD neurons, and damaged cells can release cytosolic DNA that triggers **cGAS-STING / type-I interferon** signalling. Does this show up as a **change in repair programs** along AD progression? If it does, is the change written into chromatin as well as expression?
+
+## Data
+
+| Tier | Source | Used for |
+|---|---|---|
+| **Cohort** | SEA-AD released pseudobulk objects (`Multiregion_2026/pseudobulk_objects`, ~4 GB): summed UMI counts per region × supertype × library | CPS association: **84 MTG donors (73 not severely affected)** plus 9 more regions (35–71 donors each) |
+| **Multiome** | Per-donor MTG RNA + ATAC objects for 12 donors (3 per ADNC level, ~10 GB): 210k RNA nuclei, 53k nuclei with paired ATAC | RNA vs chromatin concordance |
+
+Public bucket `s3://sea-ad-single-cell-profiling` ([Gabitto et al. 2024 Nat Neurosci](https://www.nature.com/articles/s41593-024-01774-5)). Disease axis: the **local Continuous Pseudo-progression Score (CPS)** from the 2026 multiregion release (`Global_and_Local_CPS.20260105.csv`). It supersedes the CPS stored in the 2024 MTG ATAC objects, which differs substantially for some donors. LEC has no local CPS and is excluded.
+
+## Design
+
+| Choice | Reason |
+|---|---|
+| Donor is the unit of replication | Nuclei from one donor are not independent; every test runs on donor × cell-group pseudobulks |
+| Partial correlation with CPS adjusting for **age, sex, PMI, log(#nuclei)**; permutation p (10,000 shuffles) | Robust at modest n; covariates absorb ageing, post-mortem and sampling-depth effects |
+| **13 pre-specified hypotheses**, BH within that family; everything else is labelled exploratory | Keeps the multiple-testing burden honest (306 exploratory tests per region) |
+| Primary run excludes the 11 "severely affected" donors; sensitivity run includes them | Those donors have extreme pathology and lower data quality |
+| Microglia = `Micro-PVM_*` supertypes (lymphocytes and monocytes removed) | The SEA-AD "Immune" subclass also contains T cells |
+| Programs scored as mean z-scored log2 CPM of expressed program genes, within each cell group | Comparable across donors; genes not expressed in a cell type are dropped |
+| ATAC: log2(program-promoter counts / matched-background counts) on **pseudobulk** counts | Per-cell chromVAR z-scores blow up for 10–30-peak promoter sets in sparse snATAC (see below) |
+| Positive control: **microglial DAM** must rise with CPS | If it does not, any null result for neurons is uninterpretable |
+
+## Results
+
+### 1. Neuronal DNA repair programs do not track AD progression in MTG (73 donors)
+
+![primary](docs/primary_MTG.png)
+
+| Cells | Program | partial r | p (perm) | q |
+|---|---|---|---|---|
+| Excitatory neurons | NHEJ / BER / NER / Checkpoint / p53 targets | −0.13 … +0.03 | ≥ 0.28 | ≥ 0.70 |
+| Inhibitory neurons | NHEJ / BER / NER / Checkpoint / p53 targets | −0.17 … −0.02 | ≥ 0.17 | ≥ 0.70 |
+| **Microglia** | **DAM (positive control)** | **+0.36** | **0.003** | **0.036** |
+| Microglia | cGAS-STING / IFN | +0.21 | 0.07 | 0.47 |
+| Astrocytes | Reactive astrocyte | +0.02 | 0.87 | 0.94 |
+
+The 95% CIs for every neuronal program exclude |r| > 0.4. A moderate, monotonic change in bulk neuronal repair-gene expression along CPS is unlikely. Including the severely affected donors (n = 84) gives the same picture (DAM r = +0.40, q = 0.004; all neuronal |r| < 0.13). Exploratory tests sit at the null rate (5.6% with p < 0.05; [QQ plot](docs/pvalue_qq_MTG.png)).
+
+### 2. Same pattern across the cortical arc
+
+![regions](docs/primary_by_region.png)
+
+Microglial DAM rises with local CPS in **all 9 regions** (r = 0.19–0.40; q < 0.05 in MEC and MTG). Inhibitory-neuron repair programs lean slightly negative in most regions (BER is negative in 8 of 9), but none reaches significance. The regions come from overlapping donors, so their agreement is **not** independent replication.
+
+### 3. Multiome: donor-level DDR variation is mirrored in chromatin
+
+![concordance](docs/concordance_null.png)
+
+Within each cell group, across the 10 donors with ≥ 500 paired nuclei, RNA program scores correlate with promoter accessibility of the same genes. The median r over 240 cell group × program pairs is 0.23 (73% positive). Shuffling donors gives a null median of 0.00 (95% range −0.07 to 0.07; p = 0.001). BER (0.38), HR (0.37) and p53 targets (0.29) are the most concordant; the ATM/ATR checkpoint set is the only one with a negative median (−0.15). Each pair has only 7–10 donors, so only the aggregate is interpreted.
+
+### Exploratory leads (not confirmed)
+
+* **L5 ET neurons, HR program**: r = +0.50, q = 0.01. This rests on 46 donors and a median of only 32 nuclei per donor. HR is replication-coupled, so the signal could come from doublets or ambient RNA from glia. It needs a supertype-level and decontaminated check.
+* Sst Chodl "DAM" (r = 0.88) rests on 13 donors and is almost certainly microglial contamination. It is not interpreted.
+
+### Interpretation
+
+The absence of a bulk neuronal DDR shift does not mean neurons are spared DNA damage. Two explanations fit the data:
+
+1. **Survivor bias.** SEA-AD shows that vulnerable neurons (e.g. Sst interneurons, L2/3 IT) are lost along CPS. Neurons with the heaviest damage may already be gone, so the survivors look unchanged.
+2. **Heterogeneity.** DSB-bearing neurons are a minority (Welch & Tsai 2022). Their signature is diluted in class-level pseudobulks. Testing this needs a cell-level "damaged-neuron" score and mixed models, which is the next step.
+
+Microglial activation, by contrast, is a robust donor-level signal across regions.
+
+## What 12 donors got wrong
+
+The first pass used only the 12 multiome donors. It produced confident-looking but wrong results:
+
+* **Reversed biology**: astrocytic GFAP fell with CPS (r = −0.80) and microglial DAM showed no rise. The raw marker genes showed the same thing, so this was not a pipeline bug. In 84 donors both behave as expected. The few low-CPS donors happened to carry other pathology (LATE, Lewy bodies, age 97).
+* **A NaN that looked like p = 1e-4**: donors without ATAC produced NaN scores, `abs(r_perm) >= NaN` is always False, and every such test got the minimum permutation p. Fixed and covered by a regression test (`tests/test_stats.py`).
+* **Per-cell chromVAR z-scores of 10⁷**: small promoter peak sets in sparse snATAC give zero background variance. Replaced with pseudobulk enrichment.
+* **Outdated CPS**: the ATAC objects store the 2024 CPS. The 2026 release values differ by up to 0.4 for some donors.
+
+## Reproduce
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ../sc-ddr-multiome -e ".[dev]"
+pytest -q                                      # 9 tests
+
+# cohort (all donors, ~4 GB)
+./scripts/download_pseudobulk.sh
+curl -o data/meta/Global_and_Local_CPS.csv \
+  "https://sea-ad-single-cell-profiling.s3.amazonaws.com/Multiregion_2026/model_outputs/continuous_pseudo-progression_score/Global_and_Local_CPS.20260105.csv"
+python scripts/run_cohort.py --out results/cohort          # ~2 min
+
+# multiome subset (12 donors, ~10 GB)
+python scripts/select_donors.py 3
+./scripts/download_donors.sh
+curl -o data/ref/gencode.v32.basic.annotation.gtf.gz \
+  https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_32/gencode.v32.basic.annotation.gtf.gz
+python scripts/run_analysis.py --out results/v2            # ~2.5 min, ~11 GB RAM
+python scripts/concordance_summary.py results/v2
+```
+
+`data/meta/donor_table.csv` is SEA-AD Supplementary Table 1, converted with `scripts/read_xlsx.py` (a standard-library reader; openpyxl is not needed). `scripts/diagnose_glia.py` reproduces the 12-donor marker-gene diagnostics.
+
+## Layout
+
+```
+src/ad_ddr/
+  cohort.py      released pseudobulk -> (region, cell group, donor) counts -> program scores
+  io.py          per-donor multiome loading, RNA/ATAC pairing, 2026 CPS
+  scoring.py     fixed-control RNA scorer, within-donor depth adjustment, streaming ATAC pseudobulk
+  stats.py       partial-r permutation tests, RNA-ATAC concordance
+  signatures.py  DDR sets (from ddrmulti) + DAM / cGAS-STING / reactive-astrocyte sets
+  plotting.py
+scripts/         donor selection, downloads, cohort + multiome analyses, diagnostics
+tests/           stats, scoring and aggregation tests against known ground truth
+docs/            figures and result tables shown here
+```
+
+## Limitations
+
+* Expression and accessibility programs are **proxies** for DNA damage. Direct evidence would need γH2AX / 53BP1 imaging or break mapping.
+* Cross-sectional post-mortem data cannot separate "damage response fades" from "damaged cells are lost".
+* Class-level pseudobulks can hide minority damaged states. Supertype and cell-level analyses are the next step.
+* The multiome concordance uses only 10 donors per cell group.
+
+## Next
+
+* Cell-level damaged-neuron score with donor random effects; test survivor bias against supertype loss along CPS.
+* Spatial: SEA-AD MERFISH (9 of the 12 multiome donors) with [`spatial-ddr`](../spatial-ddr), to ask whether microglial DAM / IFN niches sit next to neurons with high repair-program scores.

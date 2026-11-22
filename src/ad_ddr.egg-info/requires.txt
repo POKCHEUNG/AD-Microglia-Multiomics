@@ -1,0 +1,14 @@
+numpy
+scipy
+pandas
+matplotlib
+anndata
+scanpy>=1.9
+sc-ddr-multiome
+
+[dev]
+pytest
+
+[notebook]
+jupyterlab
+ipykernel
